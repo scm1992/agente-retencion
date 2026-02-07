@@ -13,11 +13,27 @@ st.set_page_config(page_title="Retention Pro AI", layout="wide")
 @st.cache_resource
 def load_models():
     api_key = st.secrets.get("GOOGLE_API_KEY")
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key, temperature=0)
+    # Bajamos un poco la temperatura para mayor estabilidad
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key, temperature=0.1)
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return llm, embeddings
 
 llm, embeddings = load_models()
+
+# --- FUNCIÓN DE BLINDAJE (NUEVA) ---
+def safe_invoke(prompt):
+    """Llama a la IA con reintentos y esperas si la cuota se agota"""
+    for intento in range(3):
+        try:
+            return llm.invoke(prompt)
+        except Exception as e:
+            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                st.warning(f"⚠️ Cuota de Google agotada. Reintentando en {6 + intento*2}s...")
+                time.sleep(6 + intento*2)
+                continue
+            raise e
+    st.error("❌ No se pudo conectar con Google tras varios intentos. Espera 1 minuto.")
+    return None
 
 # --- DB EN MEMORIA ---
 def init_db():
@@ -40,20 +56,16 @@ def load_rag():
 
 vectorstore = load_rag()
 
-# --- LÓGICA CON REINTENTOS (ANTI-QUOTA) ---
 def tool_sql(pregunta, id_cliente=450):
-    prompt = f"Esquema: clientes, suscripciones. SQL para: '{pregunta}' del id {id_cliente}. Usa UPPER(estado)='ACTIVO'. Solo SQL."
-    for intento in range(3):
+    prompt_sql = f"Esquema: clientes, suscripciones. SQL para: '{pregunta}' del id {id_cliente}. Usa UPPER(estado)='ACTIVO'. Solo SQL."
+    resp = safe_invoke(prompt_sql)
+    if resp:
+        query = resp.content.strip().replace("```sql", "").replace("```", "").strip()
         try:
-            query_resp = llm.invoke(prompt)
-            query = query_resp.content.strip().replace("```sql", "").replace("```", "").strip()
             return pd.read_sql_query(query, conn).to_string(index=False)
-        except Exception as e:
-            if "429" in str(e):
-                time.sleep(6) # Espera mayor para la cuota free
-                continue
-            return f"Error: {e}"
-    return "Límite de API agotado."
+        except:
+            return "Datos no encontrados."
+    return "Error de conexión."
 
 # --- INTERFAZ ---
 st.title("🛡️ Panel de Retención Inteligente")
@@ -68,8 +80,12 @@ with col1:
     
     if btn_motivo:
         if parrafo:
-            motivo = llm.invoke(f"Categorías: Precio, Competencia, Calidad. Clasifica: '{parrafo}'. 1 palabra.").content
-            st.info(f"**Motivo:** {motivo}")
+            with st.spinner("Clasificando..."):
+                resp_motivo = safe_invoke(f"Categorías: Precio, Competencia, Calidad. Clasifica esta queja: '{parrafo}'. Responde solo 1 palabra.")
+                if resp_motivo:
+                    st.info(f"**Motivo:** {resp_motivo.content}")
+        else:
+            st.warning("Escribe la queja primero.")
 
 with col2:
     st.subheader("2. Resumen y Defensa")
@@ -80,13 +96,15 @@ with col2:
         if not parrafo:
             st.warning("Escribe la queja primero.")
         else:
-            with st.spinner("Consultando datos y reglas..."):
-                sql_data = tool_sql("Datos de id 450 y productos")
-                time.sleep(3) # Pausa entre llamadas
+            with st.spinner("Analizando situación del cliente..."):
+                sql_data = tool_sql("Datos del cliente y productos")
+                time.sleep(4) # Pausa de seguridad
                 regla = vectorstore.similarity_search(parrafo, k=1)[0].page_content
-                time.sleep(3) 
+                time.sleep(4)
                 resumen_prompt = f"Resume en 5 líneas (Cliente, Baja, Otros, Propuesta) usando: {sql_data} y regla: {regla}."
-                st.session_state.resumen = llm.invoke(resumen_prompt).content
+                resp_res = safe_invoke(resumen_prompt)
+                if resp_res:
+                    st.session_state.resumen = resp_res.content
     
     if st.session_state.resumen:
         st.markdown(st.session_state.resumen)
@@ -99,7 +117,6 @@ with col2:
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"): st.markdown(prompt)
             with st.chat_message("assistant"):
-                # Simplificamos a una sola llamada para ahorrar cuota
-                resp = tool_sql(prompt) 
-                st.markdown(resp)
-                st.session_state.messages.append({"role": "assistant", "content": resp})
+                resp_chat = tool_sql(prompt) 
+                st.markdown(resp_chat)
+                st.session_state.messages.append({"role": "assistant", "content": resp_chat})
