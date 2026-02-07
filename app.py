@@ -12,7 +12,9 @@ st.set_page_config(page_title="Retention Pro - Full Architecture", layout="wide"
 @st.cache_resource
 def load_models():
     api_key = st.secrets.get("GOOGLE_API_KEY")
-    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key, temperature=0)
+    # llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key, temperature=0)
+    # Cambiamos a gemini-1.5-flash que tiene una cuota mucho más relajada y estable
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0)
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return llm, embeddings
 
@@ -134,3 +136,4 @@ if prompt_chat := st.chat_input("Ej: ¿Cuál es el impacto en margen de esta ofe
         if res_chat:
             st.session_state.chat_history.append({"role": "assistant", "content": res_chat.content})
             with st.chat_message("assistant"): st.markdown(res_chat.content)
+
