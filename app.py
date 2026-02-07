@@ -12,15 +12,29 @@ st.set_page_config(page_title="Retention Pro - High Availability", layout="wide"
 @st.cache_resource
 def load_models():
     api_key = st.secrets.get("GOOGLE_API_KEY")
-    # Intentamos cargar el 2.0, pero si la cuota es 0, usamos el 1.5 como respaldo
-    try:
-        llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key, temperature=0)
-        # Pequeño test de conectividad
-        llm.invoke("Ping")
-    except Exception:
-        # Si el 2.0 falla por cuota (RESOURCE_EXHAUSTED), usamos el 1.5 Flash
-        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0)
+    llm = None
     
+    # Lista de nombres en orden de prioridad
+    model_names = [
+        "gemini-1.5-flash-latest", # El más compatible con v1beta
+        "gemini-1.5-flash",        # El estándar
+        "gemini-2.0-flash"         # El nuevo (por si se reseteó la cuota)
+    ]
+    
+    for name in model_names:
+        try:
+            test_llm = ChatGoogleGenerativeAI(model=name, google_api_key=api_key, temperature=0)
+            # Prueba de vida real
+            test_llm.invoke("Hi")
+            llm = test_llm
+            break # Si funciona, salimos del bucle
+        except Exception:
+            continue
+            
+    if llm is None:
+        st.error("No se pudo conectar con ningún modelo de Gemini. Revisa tu API Key.")
+        st.stop()
+        
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return llm, embeddings
 
@@ -138,3 +152,4 @@ if p := st.chat_input("Pregunte sobre ofertas de la competencia o datos del clie
             st.rerun()
         except Exception as e: 
             st.error(f"Error en chat: {e}")
+
