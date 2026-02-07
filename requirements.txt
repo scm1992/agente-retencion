@@ -1,6 +1,6 @@
-langchain-google-genai>=1.0.0
 streamlit
 pandas
+langchain-google-genai>=2.0.0
 langchain-community
 sentence-transformers
 faiss-cpu
