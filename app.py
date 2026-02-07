@@ -7,39 +7,42 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Retention Pro AI", layout="wide")
 
 @st.cache_resource
 def load_models():
     api_key = st.secrets.get("GOOGLE_API_KEY")
-    # Bajamos un poco la temperatura para mayor estabilidad
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=api_key, temperature=0.1)
+    # Usamos temperatura 0 para que la IA sea más precisa y no "alucine"
+    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key, temperature=0)
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return llm, embeddings
 
 llm, embeddings = load_models()
 
-# --- FUNCIÓN DE BLINDAJE (NUEVA) ---
+# --- BLINDAJE ULTRA-RESILIENTE ---
 def safe_invoke(prompt):
-    """Llama a la IA con reintentos y esperas si la cuota se agota"""
+    """Llama a la IA con reintentos largos para asegurar la cuota gratuita"""
     for intento in range(3):
         try:
             return llm.invoke(prompt)
         except Exception as e:
             if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                st.warning(f"⚠️ Cuota de Google agotada. Reintentando en {6 + intento*2}s...")
-                time.sleep(6 + intento*2)
+                espera = 15 + (intento * 5) # Espera 15s, luego 20s...
+                st.warning(f"⚠️ API Saturada. Esperando {espera} segundos para reintentar...")
+                time.sleep(espera)
                 continue
-            raise e
-    st.error("❌ No se pudo conectar con Google tras varios intentos. Espera 1 minuto.")
+            st.error(f"Error inesperado: {e}")
+            return None
     return None
 
-# --- DB EN MEMORIA ---
+# --- BASE DE DATOS (SQL REAL) ---
 def init_db():
     conn = sqlite3.connect(":memory:", check_same_thread=False)
+    # Tabla de Clientes
     pd.DataFrame([[450, 'Juan Pérez', 24, 'Premium', 'Alta']], 
                  columns=['id', 'nombre', 'antiguedad', 'nivel_segmento', 'fidelidad']).to_sql('clientes', conn, index=False)
+    # Tabla de Suscripciones
     pd.DataFrame([
         [450, 'Fibra 1Gbps', 40.0, 'Activo', 'Internet'],
         [450, 'Streaming Premium', 15.99, 'En Proceso Baja', 'Ocio'],
@@ -49,74 +52,85 @@ def init_db():
 
 conn = init_db()
 
+# --- MOTOR RAG (MANUAL REAL) ---
 @st.cache_resource
 def load_rag():
-    reglas = ["Oferta Ocio: 50% dto 3 meses.", "Ventaja: Tenemos fútbol, StreamMax no."]
+    reglas = [
+        "REGLA_OCIO: Si el cliente quiere bajar Streaming, ofrecer 50% dto por 3 meses (Oferta Retención Ocio).",
+        "VENTAJA_COMPETITIVA: StreamMax no incluye deportes en vivo ni fútbol, nuestra plataforma sí.",
+        "REGLA_FIDELIDAD: Clientes con >12 meses y nivel Premium tienen prioridad para descuentos en paquetes de Fibra."
+    ]
     return FAISS.from_texts(reglas, embeddings)
 
 vectorstore = load_rag()
 
 def tool_sql(pregunta, id_cliente=450):
-    prompt_sql = f"Esquema: clientes, suscripciones. SQL para: '{pregunta}' del id {id_cliente}. Usa UPPER(estado)='ACTIVO'. Solo SQL."
+    prompt_sql = f"Dada la tabla 'clientes' (id, nombre, antiguedad, nivel_segmento, fidelidad) y 'suscripciones' (id_cliente, producto, cuota, estado, categoria). Escribe SOLO la sentencia SQL para: {pregunta} del id {id_cliente}. No uses Markdown."
     resp = safe_invoke(prompt_sql)
     if resp:
         query = resp.content.strip().replace("```sql", "").replace("```", "").strip()
         try:
-            return pd.read_sql_query(query, conn).to_string(index=False)
+            df = pd.read_sql_query(query, conn)
+            return df.to_string(index=False)
         except:
-            return "Datos no encontrados."
-    return "Error de conexión."
+            return "No se encontraron datos específicos en la DB."
+    return "Error al conectar con la base de datos."
 
-# --- INTERFAZ ---
-st.title("🛡️ Panel de Retención Inteligente")
+# --- INTERFAZ DE USUARIO ---
+st.title("🛡️ Panel de Retención Inteligente (Resilient Mode)")
+st.markdown("---")
+
 col1, col2 = st.columns([1, 1.5])
 
 with col1:
-    st.subheader("1. Entrada del Cliente")
-    parrafo = st.text_area("Transcribe la queja aquí:", height=200)
+    st.subheader("📥 Entrada del Cliente")
+    parrafo = st.text_area("Copia aquí la queja o transcripción:", height=200, placeholder="Ej: Juan Pérez quiere darse de baja porque StreamMax es más barato...")
     
-    btn_motivo = st.button("🔍 Identificar Motivo")
-    btn_resumen = st.button("📊 Generar Resumen Ejecutivo")
-    
-    if btn_motivo:
+    if st.button("🔍 1. Analizar Motivo"):
         if parrafo:
-            with st.spinner("Clasificando..."):
-                resp_motivo = safe_invoke(f"Categorías: Precio, Competencia, Calidad. Clasifica esta queja: '{parrafo}'. Responde solo 1 palabra.")
-                if resp_motivo:
-                    st.info(f"**Motivo:** {resp_motivo.content}")
+            with st.spinner("Analizando intención..."):
+                resp = safe_invoke(f"Clasifica esta queja en una sola palabra (Precio, Competencia o Calidad): {parrafo}")
+                if resp: st.success(f"**Motivo detectado:** {resp.content}")
         else:
-            st.warning("Escribe la queja primero.")
+            st.warning("Introduce un texto primero.")
 
 with col2:
-    st.subheader("2. Resumen y Defensa")
+    st.subheader("📊 2. Resumen Ejecutivo de Retención")
     if "resumen" not in st.session_state: st.session_state.resumen = ""
-    if "messages" not in st.session_state: st.session_state.messages = []
 
-    if btn_resumen:
+    if st.button("🚀 Generar Análisis Completo"):
         if not parrafo:
-            st.warning("Escribe la queja primero.")
+            st.warning("Escribe la queja antes de analizar.")
         else:
-            with st.spinner("Analizando situación del cliente..."):
-                sql_data = tool_sql("Datos del cliente y productos")
-                time.sleep(4) # Pausa de seguridad
-                regla = vectorstore.similarity_search(parrafo, k=1)[0].page_content
-                time.sleep(4)
-                resumen_prompt = f"Resume en 5 líneas (Cliente, Baja, Otros, Propuesta) usando: {sql_data} y regla: {regla}."
-                resp_res = safe_invoke(resumen_prompt)
-                if resp_res:
-                    st.session_state.resumen = resp_res.content
-    
-    if st.session_state.resumen:
-        st.markdown(st.session_state.resumen)
-        st.divider()
-        st.subheader("💬 Chat de Profundización")
-        for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]): st.markdown(msg["content"])
+            # PASO 1: SQL
+            with st.spinner("Consultando perfiles y productos (Paso 1/3)..."):
+                sql_data = tool_sql("Lista todos los productos y cuotas")
+                time.sleep(12) # Pausa estratégica
+            
+            # PASO 2: RAG
+            with st.spinner("Buscando mejores ofertas en manuales (Paso 2/3)..."):
+                docs = vectorstore.similarity_search(parrafo, k=2)
+                reglas_encontradas = "\n".join([d.page_content for d in docs])
+                time.sleep(12) # Pausa estratégica
+            
+            # PASO 3: RESUMEN
+            with st.spinner("Redactando propuesta final (Paso 3/3)..."):
+                prompt_final = f"""
+                Actúa como experto en retención. Usa estos datos:
+                DATOS CLIENTE: {sql_data}
+                REGLAS APLICABLES: {reglas_encontradas}
+                QUEJA: {parrafo}
+                
+                Escribe un resumen con este formato:
+                - CLIENTE: (Nombre y antigüedad)
+                - ESTADO ACTUAL: (Qué productos tiene y cuánto paga)
+                - RIESGO: (Por qué se quiere ir)
+                - PROPUESTA: (Usa las reglas para ofrecer una solución específica)
+                """
+                resp_final = safe_invoke(prompt_final)
+                if resp_final:
+                    st.session_state.resumen = resp_final.content
 
-        if prompt := st.chat_input("Pregunta algo más..."):
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"): st.markdown(prompt)
-            with st.chat_message("assistant"):
-                resp_chat = tool_sql(prompt) 
-                st.markdown(resp_chat)
-                st.session_state.messages.append({"role": "assistant", "content": resp_chat})
+    if st.session_state.resumen:
+        st.info("### Análisis Generado")
+        st.markdown(st.session_state.resumen)
