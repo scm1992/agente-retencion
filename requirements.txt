@@ -1,5 +1,6 @@
-langchain-google-genai
-langchain-community
-faiss-cpu
-sentence-transformers
+streamlit
 pandas
+google-generativeai
+langchain-community
+sentence-transformers
+faiss-cpu
