@@ -6,24 +6,33 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Retention Pro AI - Debug Mode", layout="wide")
+# --- CONFIGURACIÓN DE MODELOS CON FALLBACK ---
+st.set_page_config(page_title="Retention Pro - High Availability", layout="wide")
 
 @st.cache_resource
 def load_models():
     api_key = st.secrets.get("GOOGLE_API_KEY")
-    # Gemini 2.0 para máxima capacidad de razonamiento SQL
-    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key, temperature=0)
+    # Intentamos cargar el 2.0, pero si la cuota es 0, usamos el 1.5 como respaldo
+    try:
+        llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key, temperature=0)
+        # Pequeño test de conectividad
+        llm.invoke("Ping")
+    except Exception:
+        # Si el 2.0 falla por cuota (RESOURCE_EXHAUSTED), usamos el 1.5 Flash
+        llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0)
+    
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return llm, embeddings
 
 llm, embeddings = load_models()
 
-# --- DB SQLITE (Evaluación Text-to-SQL) ---
+# --- DB SQLITE (Estructura para Text-to-SQL) ---
 def init_db():
     conn = sqlite3.connect(":memory:", check_same_thread=False)
+    # Tabla Clientes
     pd.DataFrame([[450, 'Juan Pérez', 24, 'Premium', 'Alta']], 
                  columns=['id', 'nombre', 'antiguedad', 'nivel', 'fidelidad']).to_sql('clientes', conn, index=False)
+    # Tabla Suscripciones
     pd.DataFrame([
         [450, 'Fibra 1Gbps', 40.0, 'Activo', 'Internet'],
         [450, 'Streaming Premium', 15.99, 'Baja', 'Ocio'],
@@ -33,7 +42,7 @@ def init_db():
 
 conn = init_db()
 
-# --- RAG (Datos Internos y Competencia) ---
+# --- RAG (Manual de Retención y Competencia) ---
 @st.cache_resource
 def load_rag():
     reglas = [
@@ -52,75 +61,75 @@ if "chat_history" not in st.session_state: st.session_state.chat_history = []
 
 # --- INTERFAZ ---
 st.title("🛡️ Sistema de Retención Inteligente")
-st.markdown("Versión de diagnóstico con captura de errores y enfriamiento de API.")
+st.info(f"Modelo activo: {llm.model}")
 
 # 1. ENTRADA Y ANÁLISIS
 st.subheader("📥 1. Análisis de Queja")
-parrafo = st.text_area("Explicación del cliente:", height=150, 
-                       placeholder="Escriba aquí la queja para analizar...")
+parrafo = st.text_area("Transcripción de la llamada / Queja:", height=150, 
+                       placeholder="Introduzca el texto para clasificar y extraer datos...")
 
 if st.button("🔍 Clasificar y Generar Resumen SQL"):
     if not parrafo:
-        st.warning("Escribe la queja primero.")
+        st.warning("Por favor, introduzca una queja.")
     else:
         # A. Clasificación de Motivo
-        with st.spinner("Clasificando motivo..."):
-            prompt_clase = f"Clasifica esta queja: [Precio, Competencia, Calidad, Personal]. Texto: {parrafo}. Responde solo la palabra."
+        with st.spinner("Clasificando motivo de baja..."):
+            prompt_clase = f"Clasifica esta queja: [Precio, Competencia, Calidad, Personal]. Texto: {parrafo}. Responde solo con una de las palabras."
             try:
                 res_clase = llm.invoke(prompt_clase)
                 st.session_state.analisis_motivo = res_clase.content.strip()
                 st.success(f"**Motivo detectado:** {st.session_state.analisis_motivo}")
             except Exception as e: 
-                st.error(f"Error técnico en clasificación: {e}")
+                st.error(f"Error en clasificación: {e}")
 
-        # --- PAUSA TÉCNICA (Evita error 429 por ráfaga) ---
-        st.info("🕒 Esperando 2 segundos para liberar cuota de API...")
+        # Pausa de seguridad para evitar ráfagas (Rate Limiting)
         time.sleep(2) 
 
-        # B. Text-to-SQL para Resumen
-        with st.spinner("Generando resumen de datos mediante SQL..."):
+        # B. Text-to-SQL
+        with st.spinner("Generando consulta SQL técnica..."):
             prompt_sql = f"""
             Genera un SQL para obtener nombre, nivel, producto, cuota y estado del cliente 450.
             Tablas: clientes (id, nombre, nivel), suscripciones (id_cliente, producto, cuota, estado).
-            Responde SOLO el código SQL, sin explicaciones ni markdown.
+            Responde SOLO el código SQL plano, sin bloques de código ni explicaciones.
             """
             try:
                 res_sql = llm.invoke(prompt_sql)
-                # Limpieza de formato para ejecución
+                # Limpieza por si la IA añade markdown
                 query = res_sql.content.strip().replace("```sql", "").replace("```", "").strip()
                 st.code(query, language="sql")
                 
+                # Ejecución y guardado de contexto
                 df = pd.read_sql_query(query, conn)
                 st.session_state.datos_contexto = df.to_string()
                 st.dataframe(df)
             except Exception as e: 
-                st.error(f"Error técnico en Text-to-SQL: {e}")
+                st.error(f"Error en Text-to-SQL: {e}")
 
 # 2. CHAT DE PROFUNDIZACIÓN
 st.divider()
-st.subheader("💬 2. Chat de Profundización")
+st.subheader("💬 2. Chat de Profundización (RAG)")
 
 for m in st.session_state.chat_history:
     with st.chat_message(m["role"]): st.markdown(m["content"])
 
-if p := st.chat_input("Consulta sobre reglas de negocio o el cliente..."):
+if p := st.chat_input("Pregunte sobre ofertas de la competencia o datos del cliente..."):
     st.session_state.chat_history.append({"role": "user", "content": p})
     with st.chat_message("user"): st.markdown(p)
     
-    with st.spinner("Consultando RAG y contexto..."):
-        # Búsqueda RAG
+    with st.spinner("Buscando en manuales y datos..."):
+        # Búsqueda semántica en RAG
         docs = vectorstore.similarity_search(p, k=2)
         contexto_rag = "\n".join([d.page_content for d in docs])
         
-        # Respuesta integral
+        # Generación de respuesta contextual
         prompt_chat = f"""
-        Eres un asistente de retención experto.
-        CONTEXTO DEL CLIENTE (SQL): {st.session_state.datos_contexto}
-        MOTIVO DE QUEJA: {st.session_state.analisis_motivo}
-        DATOS DE COMPETENCIA/REGLAS (RAG): {contexto_rag}
+        Eres un experto en retención de clientes.
+        CONTEXTO SQL: {st.session_state.datos_contexto}
+        MOTIVO: {st.session_state.analisis_motivo}
+        DATOS RAG: {contexto_rag}
         PREGUNTA: {p}
         
-        Responde de forma profesional y orientada a la fidelización.
+        Responde de forma estratégica y breve.
         """
         try:
             res_chat = llm.invoke(prompt_chat)
@@ -128,4 +137,4 @@ if p := st.chat_input("Consulta sobre reglas de negocio o el cliente..."):
             with st.chat_message("assistant"): st.markdown(res_chat.content)
             st.rerun()
         except Exception as e: 
-            st.error(f"Error técnico en chat: {e}")
+            st.error(f"Error en chat: {e}")
