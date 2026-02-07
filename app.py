@@ -6,40 +6,38 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Retention Pro - Library Final", layout="wide")
+# --- CONFIGURACIÓN ESTRICTA ---
+st.set_page_config(page_title="Retention Pro - V2 Core", layout="wide")
 
 @st.cache_resource
 def load_models():
+    # 1. Recuperamos la API Key
     api_key = st.secrets["GOOGLE_API_KEY"]
     
-    # 'gemini-pro' es el nombre universal. 
-    # Si la librería es antigua, este es el único que reconocerá sin dar 404.
-    model_name = "gemini-pro" 
-    
+    # 2. Configuración para langchain-google-genai >= 2.0.0
+    # Usamos "gemini-1.5-flash" que es el estándar actual en la API v1.
     llm = ChatGoogleGenerativeAI(
-        model=model_name,
+        model="gemini-1.5-flash",
         google_api_key=api_key,
-        temperature=0,
+        temperature=0
     )
     
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return llm, embeddings
 
-# Inicialización de recursos
+# Inicialización segura
 try:
     llm, embeddings = load_models()
 except Exception as e:
-    st.error(f"Error al cargar los modelos: {e}")
+    st.error(f"Error crítico de inicialización: {e}")
     st.stop()
 
 # --- BASE DE DATOS SQLITE ---
 def init_db():
     conn = sqlite3.connect(":memory:", check_same_thread=False)
-    # Tabla Clientes
+    # Datos de Juan Pérez
     pd.DataFrame([[450, 'Juan Pérez', 24, 'Premium']], 
                  columns=['id', 'nombre', 'antiguedad', 'nivel']).to_sql('clientes', conn, index=False)
-    # Tabla Suscripciones
     pd.DataFrame([[450, 'Streaming Premium', 15.99, 'Baja']], 
                  columns=['id_cliente', 'producto', 'cuota', 'estado']).to_sql('suscripciones', conn, index=False)
     return conn
@@ -47,30 +45,32 @@ def init_db():
 conn = init_db()
 
 # --- INTERFAZ ---
-st.title("🛡️ Sistema de Retención (LangChain Stable)")
-st.success("✅ Librerías cargadas correctamente.")
+st.title("🛡️ Sistema de Retención (Core V2)")
+st.info(f"Librería actualizada. Modelo activo: {llm.model}")
 
 queja = st.text_area("Queja del cliente:", "Juan Pérez dice que el precio es excesivo comparado con la competencia.")
 
-if st.button("🔍 Analizar Caso"):
+if st.button("🚀 Ejecutar Análisis"):
     try:
-        # A. Clasificación
-        with st.spinner("Clasificando con Gemini..."):
-            # Usamos el formato de mensaje que LangChain prefiere ahora
-            res_clase = llm.invoke(f"Clasifica el motivo de esta queja en una sola palabra [Precio, Competencia, Calidad]: {queja}")
-            st.session_state.motivo_detectado = res_clase.content.strip()
-            st.info(f"**Motivo detectado:** {st.session_state.motivo_detectado}")
+        # A. CLASIFICACIÓN
+        with st.spinner("Clasificando..."):
+            # Prompt simple y directo
+            res_clase = llm.invoke(f"Clasifica el motivo: [Precio, Competencia, Calidad]. Texto: {queja}. Solo la categoría.")
+            st.session_state.motivo = res_clase.content.strip()
+            st.success(f"**Motivo:** {st.session_state.motivo}")
+        
+        time.sleep(1) 
 
-        time.sleep(1) # Respiro para la API
-
-        # B. Text-to-SQL
-        with st.spinner("Generando SQL de consulta..."):
+        # B. TEXT-TO-SQL
+        with st.spinner("Generando SQL..."):
             prompt_sql = """
-            Genera un código SQL para SQLite que devuelva nombre, nivel, producto y cuota del cliente con ID 450.
-            Tablas: clientes (id, nombre, nivel), suscripciones (id_cliente, producto, cuota).
-            IMPORTANTE: Devuelve SOLO el texto del SQL, nada más.
+            Genera SOLO el código SQL para SQLite (sin markdown) para obtener: nombre, nivel, producto, cuota.
+            Del cliente id 450.
+            Tablas: clientes, suscripciones.
             """
             res_sql = llm.invoke(prompt_sql)
+            
+            # Limpieza estándar
             query = res_sql.content.strip().replace("```sql", "").replace("```", "").strip()
             st.code(query, language="sql")
             
@@ -79,16 +79,14 @@ if st.button("🔍 Analizar Caso"):
             st.dataframe(df)
             
     except Exception as e:
-        st.error(f"Hubo un problema con la IA: {e}")
+        st.error(f"Error en ejecución: {e}")
 
 # --- CHAT ---
 st.divider()
-if prompt := st.chat_input("Pregunta sobre el cliente..."):
-    with st.chat_message("user"): st.write(prompt)
+if p := st.chat_input("Pregunta sobre el caso..."):
+    with st.chat_message("user"): st.write(p)
     try:
-        respuesta = llm.invoke(prompt)
-        with st.chat_message("assistant"): st.write(respuesta.content)
+        res = llm.invoke(p)
+        with st.chat_message("assistant"): st.write(res.content)
     except Exception as e:
-        st.error(f"Error en el chat: {e}")
-
-
+        st.error(f"Error chat: {e}")
