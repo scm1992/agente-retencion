@@ -7,7 +7,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Retention Pro AI", layout="wide")
+st.set_page_config(page_title="Retention Pro AI - Debug Mode", layout="wide")
 
 @st.cache_resource
 def load_models():
@@ -22,7 +22,8 @@ llm, embeddings = load_models()
 # --- DB SQLITE (Evaluación Text-to-SQL) ---
 def init_db():
     conn = sqlite3.connect(":memory:", check_same_thread=False)
-    pd.DataFrame([[450, 'Juan Pérez', 24, 'Premium', 'Alta']], columns=['id', 'nombre', 'antiguedad', 'nivel', 'fidelidad']).to_sql('clientes', conn, index=False)
+    pd.DataFrame([[450, 'Juan Pérez', 24, 'Premium', 'Alta']], 
+                 columns=['id', 'nombre', 'antiguedad', 'nivel', 'fidelidad']).to_sql('clientes', conn, index=False)
     pd.DataFrame([
         [450, 'Fibra 1Gbps', 40.0, 'Activo', 'Internet'],
         [450, 'Streaming Premium', 15.99, 'Baja', 'Ocio'],
@@ -51,10 +52,12 @@ if "chat_history" not in st.session_state: st.session_state.chat_history = []
 
 # --- INTERFAZ ---
 st.title("🛡️ Sistema de Retención Inteligente")
+st.markdown("Versión de diagnóstico con captura de errores y enfriamiento de API.")
 
 # 1. ENTRADA Y ANÁLISIS
 st.subheader("📥 1. Análisis de Queja")
-parrafo = st.text_area("Explicación del cliente:", height=150, placeholder="Ej: Juan Pérez quiere la baja de Streaming porque StreamMax es más barato...")
+parrafo = st.text_area("Explicación del cliente:", height=150, 
+                       placeholder="Escriba aquí la queja para analizar...")
 
 if st.button("🔍 Clasificar y Generar Resumen SQL"):
     if not parrafo:
@@ -62,38 +65,45 @@ if st.button("🔍 Clasificar y Generar Resumen SQL"):
     else:
         # A. Clasificación de Motivo
         with st.spinner("Clasificando motivo..."):
-            prompt_clase = f"Clasifica esta queja en una de estas categorías: [Precio, Competencia, Calidad, Personal]. Queja: {parrafo}. Responde solo la palabra."
+            prompt_clase = f"Clasifica esta queja: [Precio, Competencia, Calidad, Personal]. Texto: {parrafo}. Responde solo la palabra."
             try:
                 res_clase = llm.invoke(prompt_clase)
-                st.session_state.analisis_motivo = res_clase.content
+                st.session_state.analisis_motivo = res_clase.content.strip()
                 st.success(f"**Motivo detectado:** {st.session_state.analisis_motivo}")
-            except: st.error("Error de cuota en clasificación.")
+            except Exception as e: 
+                st.error(f"Error técnico en clasificación: {e}")
+
+        # --- PAUSA TÉCNICA (Evita error 429 por ráfaga) ---
+        st.info("🕒 Esperando 2 segundos para liberar cuota de API...")
+        time.sleep(2) 
 
         # B. Text-to-SQL para Resumen
         with st.spinner("Generando resumen de datos mediante SQL..."):
             prompt_sql = f"""
             Genera un SQL para obtener nombre, nivel, producto, cuota y estado del cliente 450.
             Tablas: clientes (id, nombre, nivel), suscripciones (id_cliente, producto, cuota, estado).
-            Solo el código SQL.
+            Responde SOLO el código SQL, sin explicaciones ni markdown.
             """
             try:
                 res_sql = llm.invoke(prompt_sql)
+                # Limpieza de formato para ejecución
                 query = res_sql.content.strip().replace("```sql", "").replace("```", "").strip()
                 st.code(query, language="sql")
+                
                 df = pd.read_sql_query(query, conn)
                 st.session_state.datos_contexto = df.to_string()
                 st.dataframe(df)
-            except: st.error("Error de cuota en Text-to-SQL.")
+            except Exception as e: 
+                st.error(f"Error técnico en Text-to-SQL: {e}")
 
 # 2. CHAT DE PROFUNDIZACIÓN
 st.divider()
 st.subheader("💬 2. Chat de Profundización")
-st.caption("Consulta sobre competencia, reglas de negocio o detalles del cliente.")
 
 for m in st.session_state.chat_history:
     with st.chat_message(m["role"]): st.markdown(m["content"])
 
-if p := st.chat_input("Ej: ¿Qué oferta de la competencia le afecta y qué podemos ofrecerle?"):
+if p := st.chat_input("Consulta sobre reglas de negocio o el cliente..."):
     st.session_state.chat_history.append({"role": "user", "content": p})
     with st.chat_message("user"): st.markdown(p)
     
@@ -104,16 +114,18 @@ if p := st.chat_input("Ej: ¿Qué oferta de la competencia le afecta y qué pode
         
         # Respuesta integral
         prompt_chat = f"""
-        Eres un asistente de retención.
-        DATOS CLIENTE (SQL): {st.session_state.datos_contexto}
-        MOTIVO DETECTADO: {st.session_state.analisis_motivo}
-        DATOS INTERNOS/COMPETENCIA (RAG): {contexto_rag}
+        Eres un asistente de retención experto.
+        CONTEXTO DEL CLIENTE (SQL): {st.session_state.datos_contexto}
+        MOTIVO DE QUEJA: {st.session_state.analisis_motivo}
+        DATOS DE COMPETENCIA/REGLAS (RAG): {contexto_rag}
         PREGUNTA: {p}
         
-        Responde de forma concisa y profesional.
+        Responde de forma profesional y orientada a la fidelización.
         """
         try:
             res_chat = llm.invoke(prompt_chat)
             st.session_state.chat_history.append({"role": "assistant", "content": res_chat.content})
             with st.chat_message("assistant"): st.markdown(res_chat.content)
-        except: st.error("Cuota agotada para el chat.")
+            st.rerun()
+        except Exception as e: 
+            st.error(f"Error técnico en chat: {e}")
