@@ -14,7 +14,8 @@ st.set_page_config(page_title="Retention Pro AI", layout="wide")
 def load_models():
     api_key = st.secrets.get("GOOGLE_API_KEY")
     # Usamos temperatura 0 para que la IA sea más precisa y no "alucine"
-    llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key, temperature=0)
+    # llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", google_api_key=api_key, temperature=0)
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key, temperature=0)
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return llm, embeddings
 
@@ -134,3 +135,4 @@ with col2:
     if st.session_state.resumen:
         st.info("### Análisis Generado")
         st.markdown(st.session_state.resumen)
+
