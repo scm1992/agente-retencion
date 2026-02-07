@@ -17,7 +17,7 @@ genai.configure(api_key=api_key)
 def load_resources():
     # Intentamos con el modelo más compatible
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         # Test rápido para validar la nueva Key
         model.generate_content("test")
     except Exception as e:
@@ -90,3 +90,4 @@ if pregunta:
     with st.chat_message("user"): st.write(pregunta)
     res_chat = model.generate_content(f"Contexto: {st.session_state.datos_sql}. Pregunta: {pregunta}")
     with st.chat_message("assistant"): st.write(res_chat.text)
+
