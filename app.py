@@ -13,9 +13,9 @@ st.set_page_config(page_title="Retention Pro - Library Final", layout="wide")
 def load_models():
     api_key = st.secrets["GOOGLE_API_KEY"]
     
-    # Intentamos con el nombre técnico exacto que suele arreglar el error 404
-    # Si 'gemini-1.5-flash' falla, 'gemini-1.5-flash-latest' suele ser la clave.
-    model_name = "gemini-1.5-flash-latest" 
+    # 'gemini-pro' es el nombre universal. 
+    # Si la librería es antigua, este es el único que reconocerá sin dar 404.
+    model_name = "gemini-pro" 
     
     llm = ChatGoogleGenerativeAI(
         model=model_name,
@@ -90,4 +90,5 @@ if prompt := st.chat_input("Pregunta sobre el cliente..."):
         with st.chat_message("assistant"): st.write(respuesta.content)
     except Exception as e:
         st.error(f"Error en el chat: {e}")
+
 
