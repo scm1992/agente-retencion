@@ -11,21 +11,18 @@ st.set_page_config(page_title="Retention Pro - Library Final", layout="wide")
 
 @st.cache_resource
 def load_models():
-    # Obtenemos la Key de los secretos
     api_key = st.secrets["GOOGLE_API_KEY"]
     
-    # Configuramos el LLM de forma limpia
-    # Quitamos client_options para evitar el error de Pydantic
+    # Intentamos con el nombre técnico exacto que suele arreglar el error 404
+    # Si 'gemini-1.5-flash' falla, 'gemini-1.5-flash-latest' suele ser la clave.
+    model_name = "gemini-1.5-flash-latest" 
+    
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model=model_name,
         google_api_key=api_key,
         temperature=0,
-        max_output_tokens=None,
-        timeout=None,
-        max_retries=2,
     )
     
-    # Cargamos embeddings
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     return llm, embeddings
 
@@ -93,3 +90,4 @@ if prompt := st.chat_input("Pregunta sobre el cliente..."):
         with st.chat_message("assistant"): st.write(respuesta.content)
     except Exception as e:
         st.error(f"Error en el chat: {e}")
+
