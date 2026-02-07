@@ -1,44 +1,53 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-import requests
-import json
+import google.generativeai as genai
+import platform
 import time
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Retention Pro - V1 Direct", layout="wide")
+st.set_page_config(page_title="Debug Mode - Retention", layout="wide")
 
-API_KEY = st.secrets["GOOGLE_API_KEY"]
-# FORZAMOS MANUALMENTE LA VERSIÓN v1 (ESTABLE) EN LA URL
-API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+def run_diagnostics():
+    st.subheader("Diagnostic Log")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.write(f"**Python Version:** {platform.python_version()}")
+        st.write(f"**GenAI Version:** {genai.__version__}")
+    with col2:
+        try:
+            # Intentamos listar los modelos que tu API KEY realmente puede ver
+            api_key = st.secrets["GOOGLE_API_KEY"]
+            genai.configure(api_key=api_key)
+            models = [m.name for m in genai.list_models()]
+            st.write("**Modelos disponibles en tu Key:**")
+            st.write(models)
+            return models
+        except Exception as e:
+            st.error(f"Error en diagnóstico de Key: {e}")
+            return []
 
-def call_gemini_v1(prompt):
-    headers = {'Content-Type': 'application/json'}
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }],
-        "generationConfig": {
-            "temperature": 0.1,
-            "topP": 0.95,
-            "maxOutputTokens": 800
-        }
-    }
+# Ejecutamos el print de diagnóstico en la UI
+available_models = run_diagnostics()
+
+@st.cache_resource
+def load_resources():
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    genai.configure(api_key=api_key)
     
-    response = requests.post(API_URL, headers=headers, json=payload)
+    # ESTRATEGIA: Probamos el nombre sin el prefijo 'models/' 
+    # por si la librería lo está duplicando internamente.
+    model_to_use = "gemini-1.5-flash" 
     
-    if response.status_code == 200:
-        return response.json()['candidates'][0]['content']['parts'][0]['text']
-    else:
-        error_msg = response.text
-        # Si Google nos dice que el modelo no existe en v1, probamos el alias universal
-        if "404" in str(response.status_code):
-            alt_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={API_KEY}"
-            response = requests.post(alt_url, headers=headers, json=payload)
-            if response.status_code == 200:
-                return response.json()['candidates'][0]['content']['parts'][0]['text']
-        
-        raise Exception(f"Error {response.status_code}: {error_msg}")
+    # Si en el diagnóstico vimos nombres, intentamos el primero que sea flash
+    for m in available_models:
+        if "1.5-flash" in m:
+            model_to_use = m # Esto suele ser 'models/gemini-1.5-flash'
+            break
+            
+    return genai.GenerativeModel(model_to_use)
+
+model = load_resources()
 
 # --- DB SQLITE ---
 def init_db():
@@ -50,43 +59,44 @@ def init_db():
 conn = init_db()
 
 # --- INTERFAZ ---
-st.title("🛡️ Sistema de Retención (Fuerza Bruta v1)")
-st.warning("⚠️ Saltando librerías corruptas. Conexión directa por HTTP v1.")
+st.divider()
+st.title("🛡️ Sistema de Retención (Library Debug Mode)")
 
 queja = st.text_area("Queja de Juan Pérez:", "Juan Pérez dice que el precio es excesivo comparado con la competencia.")
 
 if st.button("🚀 Ejecutar Análisis"):
+    st.write("### Proceso interno:")
+    
+    # PASO 1: Clasificación
     try:
-        # A. CLASIFICACIÓN
-        with st.spinner("IA Clasificando (v1)..."):
-            prompt_clase = f"Clasifica el motivo de esta queja en una sola palabra [Precio, Competencia, Calidad]: {queja}"
-            motivo = call_gemini_v1(prompt_clase)
-            st.info(f"**Motivo Detectado:** {motivo.strip()}")
-        
-        time.sleep(1)
-
-        # B. TEXT-TO-SQL
-        with st.spinner("Generando SQL (v1)..."):
-            prompt_sql = """Genera SOLO el código SQL para SQLite (sin markdown) para obtener: 
-            nombre, nivel, producto y cuota del cliente id 450. 
-            Tablas: clientes (id, nombre, nivel), suscripciones (id_cliente, producto, cuota)."""
-            
-            sql_raw = call_gemini_v1(prompt_sql)
-            query = sql_raw.strip().replace("```sql", "").replace("```", "").strip()
-            
-            st.code(query, language="sql")
-            df = pd.read_sql_query(query, conn)
-            st.dataframe(df)
-            
+        st.write("1. Enviando prompt de clasificación...")
+        response = model.generate_content(f"Clasifica: [Precio, Competencia]. Queja: {queja}")
+        st.success(f"**Motivo:** {response.text}")
     except Exception as e:
-        st.error(f"Fallo en la conexión directa: {e}")
+        st.error(f"Fallo en Paso 1: {e}")
+        st.stop()
+
+    time.sleep(1)
+
+    # PASO 2: SQL
+    try:
+        st.write("2. Generando SQL...")
+        prompt_sql = "Genera SQL para SQLite: SELECT nombre, nivel FROM clientes WHERE id=450. Solo el código."
+        response_sql = model.generate_content(prompt_sql)
+        query = response_sql.text.strip().replace("```sql", "").replace("```", "").strip()
+        st.code(query, language="sql")
+        
+        df = pd.read_sql_query(query, conn)
+        st.dataframe(df)
+    except Exception as e:
+        st.error(f"Fallo en Paso 2: {e}")
 
 # --- CHAT ---
 st.divider()
 if p := st.chat_input("Pregunta algo..."):
     with st.chat_message("user"): st.write(p)
     try:
-        respuesta = call_gemini_v1(p)
-        with st.chat_message("assistant"): st.write(respuesta)
+        res = model.generate_content(p)
+        with st.chat_message("assistant"): st.write(res.text)
     except Exception as e:
         st.error(f"Error: {e}")
