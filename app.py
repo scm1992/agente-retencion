@@ -7,7 +7,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Arquitectura Real Resiliente", layout="wide")
+st.set_page_config(page_title="Retention Pro - Full Architecture", layout="wide")
 
 @st.cache_resource
 def load_models():
@@ -18,7 +18,7 @@ def load_models():
 
 llm, embeddings = load_models()
 
-# --- BLINDAJE CON LOGS ---
+# --- BLINDAJE ---
 def safe_invoke(prompt, step_name=""):
     for intento in range(3):
         try:
@@ -49,62 +49,88 @@ conn = init_db()
 # --- RAG REAL ---
 @st.cache_resource
 def load_rag():
-    reglas = ["OFERTA_OCIO: 50% dto 3 meses en Streaming.", "VENTAJA: Fútbol incluido.", "FIDELIDAD: Regalo bono 100GB."]
+    reglas = [
+        "OFERTA_OCIO: 50% dto 3 meses en Streaming si el cliente se queja del precio.",
+        "VENTAJA_FUTBOL: Recordar que StreamMax no tiene derechos de fútbol y nosotros sí.",
+        "BONO_DATOS: Ofrecer bono 100GB gratis si el cliente es Premium (como el ID 450)."
+    ]
     return FAISS.from_texts(reglas, embeddings)
 
 vectorstore = load_rag()
 
+# --- VARIABLES DE ESTADO ---
+if "resumen_final" not in st.session_state: st.session_state.resumen_final = ""
+if "chat_history" not in st.session_state: st.session_state.chat_history = []
+if "datos_cliente_str" not in st.session_state: st.session_state.datos_cliente_str = ""
+
 # --- INTERFAZ ---
-st.title("🛡️ Agente de Retención: Arquitectura SQL + RAG")
-parrafo = st.text_area("Queja del cliente:", height=150)
+st.title("🛡️ Sistema Integral de Retención")
+st.markdown("Esta versión ejecuta SQL real, consulta manuales RAG y permite chat de seguimiento.")
 
-if st.button("🚀 Ejecutar Proceso Completo (SQL -> RAG -> IA)"):
-    if not parrafo:
-        st.warning("Escribe la queja.")
-    else:
-        # CONTENEDORES PARA VER EL PROGRESO
-        status_sql = st.empty()
-        status_rag = st.empty()
-        status_final = st.empty()
+parrafo = st.text_area("Introduzca la queja del cliente:", height=150)
 
-        # PASO 1: SQL
-        with st.status("Fase 1: Consultando Base de Datos SQL...", expanded=True) as s:
-            st.write("Generando sentencia SQL...")
-            prompt_sql = "Escribe SOLO el SQL para: 'listar productos y cuotas del cliente 450'. Tablas: clientes, suscripciones. No markdown."
-            resp_sql = safe_invoke(prompt_sql, "SQL")
-            
-            if resp_sql:
-                query = resp_sql.content.strip().replace("```sql", "").replace("```", "").strip()
-                st.write(f"Ejecutando: `{query}`")
-                df_datos = pd.read_sql_query(query, conn)
-                st.dataframe(df_datos) # MOSTRAR LOS DATOS EXTRAÍDOS
-                contexto_sql = df_datos.to_string()
-                s.update(label="Fase 1: SQL Completado ✅", state="complete")
-            else:
-                s.update(label="Fase 1: Error ❌", state="error")
-                st.stop()
+# BOTONES DE ACCIÓN
+col_btn1, col_btn2 = st.columns(2)
 
-        st.info("🕒 Enfriando API por 90 segundos antes del siguiente paso...")
-        time.sleep(90)
+with col_btn1:
+    if st.button("🚀 Ejecutar Análisis Completo"):
+        if not parrafo:
+            st.warning("Por favor, escriba la queja.")
+        else:
+            # FASE 1: SQL
+            with st.status("Fase 1: Consultando SQL...", expanded=True) as s:
+                prompt_sql = "Escribe SOLO el SQL para: 'listar productos y cuotas del cliente 450'. Tablas: clientes, suscripciones. No uses markdown."
+                resp_sql = safe_invoke(prompt_sql, "Extracción de Datos")
+                if resp_sql:
+                    query = resp_sql.content.strip().replace("```sql", "").replace("```", "").strip()
+                    df_datos = pd.read_sql_query(query, conn)
+                    st.session_state.datos_cliente_str = df_datos.to_string()
+                    st.dataframe(df_datos) # Verificación visual
+                    s.update(label="Datos SQL extraídos ✅", state="complete")
+                else: st.stop()
 
-        # PASO 2: RAG (FAISS es local, no gasta cuota de IA, pero lo ponemos aquí)
-        with st.status("Fase 2: Consultando Manuales (RAG)...", expanded=True) as s:
-            docs = vectorstore.similarity_search(parrafo, k=2)
-            contexto_rag = "\n".join([d.page_content for d in docs])
-            st.write("Reglas de negocio encontradas:")
-            st.code(contexto_rag) # MOSTRAR LAS REGLAS EXTRAÍDAS
-            s.update(label="Fase 2: RAG Completado ✅", state="complete")
+            st.info("🕒 Enfriando API (90s) para cumplir cuota gratuita...")
+            time.sleep(90)
 
-        st.info("🕒 Enfriando API por 90 segundos antes del Informe Final...")
-        time.sleep(90)
+            # FASE 2: RAG
+            with st.status("Fase 2: Consultando RAG...", expanded=True) as s:
+                docs = vectorstore.similarity_search(parrafo, k=2)
+                contexto_rag = "\n".join([d.page_content for d in docs])
+                st.code(contexto_rag) # Verificación visual de reglas
+                s.update(label="Reglas RAG recuperadas ✅", state="complete")
 
-        # PASO 3: INFORME FINAL
-        with st.status("Fase 3: Redactando Informe con IA...", expanded=True) as s:
-            prompt_final = f"Crea un informe de retención. DATOS SQL: {contexto_sql}. REGLAS RAG: {contexto_rag}. QUEJA: {parrafo}"
-            resumen = safe_invoke(prompt_final, "Informe Final")
-            if resumen:
-                st.success("### 📄 INFORME FINAL GENERADO")
-                st.markdown(resumen.content)
-                s.update(label="Fase 3: Informe Completado ✅", state="complete")
-            else:
-                s.update(label="Fase 3: Error ❌", state="error")
+            st.info("🕒 Enfriando API (90s) para informe final...")
+            time.sleep(90)
+
+            # FASE 3: INFORME
+            with st.status("Fase 3: Generando Informe...", expanded=True) as s:
+                prompt_f = f"Genera informe de retención. DATOS: {st.session_state.datos_cliente_str}. REGLAS: {contexto_rag}. QUEJA: {parrafo}"
+                res = safe_invoke(prompt_f, "Generación Informe")
+                if res:
+                    st.session_state.resumen_final = res.content
+                    s.update(label="Informe finalizado ✅", state="complete")
+
+# EXPOSICIÓN DEL RESULTADO
+if st.session_state.resumen_final:
+    st.success("### 📄 Informe de Retención Generado")
+    st.markdown(st.session_state.resumen_final)
+
+# --- SECCIÓN DEL CHAT ---
+st.divider()
+st.subheader("💬 Chat de Profundización")
+st.caption("Pregunta detalles adicionales sobre el cliente o la estrategia.")
+
+for m in st.session_state.chat_history:
+    with st.chat_message(m["role"]): st.markdown(m["content"])
+
+if prompt_chat := st.chat_input("Ej: ¿Cuál es el impacto en margen de esta oferta?"):
+    st.session_state.chat_history.append({"role": "user", "content": prompt_chat})
+    with st.chat_message("user"): st.markdown(prompt_chat)
+    
+    with st.spinner("IA analizando datos históricos..."):
+        # Contexto enriquecido para el chat
+        contexto_completo = f"Datos Cliente: {st.session_state.datos_cliente_str}. Informe previo: {st.session_state.resumen_final}"
+        res_chat = safe_invoke(f"Contexto: {contexto_completo}. Pregunta: {prompt_chat}", "Chat")
+        if res_chat:
+            st.session_state.chat_history.append({"role": "assistant", "content": res_chat.content})
+            with st.chat_message("assistant"): st.markdown(res_chat.content)
