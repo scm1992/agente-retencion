@@ -2,51 +2,31 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import time
-from langchain_google_genai import ChatGoogleGenerativeAI
+import google.generativeai as genai
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-# --- CONFIGURACIÓN DE MODELOS CON FALLBACK ---
-st.set_page_config(page_title="Retention Pro - High Availability", layout="wide")
+# --- CONFIGURACIÓN ---
+st.set_page_config(page_title="Retention Pro - Conexión Directa", layout="wide")
+
+# Configuración directa de Google AI (Saltamos LangChain para evitar errores 404/429)
+api_key = st.secrets.get("GOOGLE_API_KEY")
+genai.configure(api_key=api_key)
 
 @st.cache_resource
-def load_models():
-    api_key = st.secrets.get("GOOGLE_API_KEY")
-    llm = None
-    
-    # Lista de nombres en orden de prioridad
-    model_names = [
-        "gemini-1.5-flash-latest", # El más compatible con v1beta
-        "gemini-1.5-flash",        # El estándar
-        "gemini-2.0-flash"         # El nuevo (por si se reseteó la cuota)
-    ]
-    
-    for name in model_names:
-        try:
-            test_llm = ChatGoogleGenerativeAI(model=name, google_api_key=api_key, temperature=0)
-            # Prueba de vida real
-            test_llm.invoke("Hi")
-            llm = test_llm
-            break # Si funciona, salimos del bucle
-        except Exception:
-            continue
-            
-    if llm is None:
-        st.error("No se pudo conectar con ningún modelo de Gemini. Revisa tu API Key.")
-        st.stop()
-        
+def load_resources():
+    # Usamos el modelo más estable disponible
+    model = genai.GenerativeModel('gemini-1.5-flash')
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    return llm, embeddings
+    return model, embeddings
 
-llm, embeddings = load_models()
+model, embeddings = load_resources()
 
-# --- DB SQLITE (Estructura para Text-to-SQL) ---
+# --- DB SQLITE ---
 def init_db():
     conn = sqlite3.connect(":memory:", check_same_thread=False)
-    # Tabla Clientes
     pd.DataFrame([[450, 'Juan Pérez', 24, 'Premium', 'Alta']], 
                  columns=['id', 'nombre', 'antiguedad', 'nivel', 'fidelidad']).to_sql('clientes', conn, index=False)
-    # Tabla Suscripciones
     pd.DataFrame([
         [450, 'Fibra 1Gbps', 40.0, 'Activo', 'Internet'],
         [450, 'Streaming Premium', 15.99, 'Baja', 'Ocio'],
@@ -56,14 +36,12 @@ def init_db():
 
 conn = init_db()
 
-# --- RAG (Manual de Retención y Competencia) ---
+# --- RAG ---
 @st.cache_resource
 def load_rag():
-    reglas = [
-        "COMPETENCIA: StreamMax (12.99€) no tiene fútbol. Nuestra oferta incluye derechos de Liga.",
-        "OFERTA_RETENCION: Si el motivo es Precio en Ocio, ofrecer 50% dto por 3 meses.",
-        "REGLA_FIDELIDAD: Clientes Premium con fidelidad Alta pueden recibir un bono de 100GB gratis."
-    ]
+    reglas = ["COMPETENCIA: StreamMax (12.99€) no tiene fútbol.", 
+              "OFERTA: 50% dto por 3 meses.", 
+              "REGLA: Bono 100GB gratis para Premium."]
     return FAISS.from_texts(reglas, embeddings)
 
 vectorstore = load_rag()
@@ -74,82 +52,53 @@ if "analisis_motivo" not in st.session_state: st.session_state.analisis_motivo =
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 
 # --- INTERFAZ ---
-st.title("🛡️ Sistema de Retención Inteligente")
-st.info(f"Modelo activo: {llm.model}")
+st.title("🛡️ Sistema de Retención (Conexión Directa)")
 
-# 1. ENTRADA Y ANÁLISIS
-st.subheader("📥 1. Análisis de Queja")
-parrafo = st.text_area("Transcripción de la llamada / Queja:", height=150, 
-                       placeholder="Introduzca el texto para clasificar y extraer datos...")
+parrafo = st.text_area("Explicación del cliente:", height=100)
 
-if st.button("🔍 Clasificar y Generar Resumen SQL"):
+if st.button("🔍 Clasificar y Generar SQL"):
     if not parrafo:
-        st.warning("Por favor, introduzca una queja.")
+        st.warning("Escribe la queja.")
     else:
-        # A. Clasificación de Motivo
-        with st.spinner("Clasificando motivo de baja..."):
-            prompt_clase = f"Clasifica esta queja: [Precio, Competencia, Calidad, Personal]. Texto: {parrafo}. Responde solo con una de las palabras."
-            try:
-                res_clase = llm.invoke(prompt_clase)
-                st.session_state.analisis_motivo = res_clase.content.strip()
-                st.success(f"**Motivo detectado:** {st.session_state.analisis_motivo}")
-            except Exception as e: 
-                st.error(f"Error en clasificación: {e}")
+        try:
+            # A. Clasificación
+            with st.spinner("Clasificando..."):
+                response = model.generate_content(f"Clasifica: [Precio, Competencia, Calidad]. Queja: {parrafo}. Solo una palabra.")
+                st.session_state.analisis_motivo = response.text.strip()
+                st.success(f"Motivo: {st.session_state.analisis_motivo}")
+            
+            time.sleep(1) # Respiro
 
-        # Pausa de seguridad para evitar ráfagas (Rate Limiting)
-        time.sleep(2) 
-
-        # B. Text-to-SQL
-        with st.spinner("Generando consulta SQL técnica..."):
-            prompt_sql = f"""
-            Genera un SQL para obtener nombre, nivel, producto, cuota y estado del cliente 450.
-            Tablas: clientes (id, nombre, nivel), suscripciones (id_cliente, producto, cuota, estado).
-            Responde SOLO el código SQL plano, sin bloques de código ni explicaciones.
-            """
-            try:
-                res_sql = llm.invoke(prompt_sql)
-                # Limpieza por si la IA añade markdown
-                query = res_sql.content.strip().replace("```sql", "").replace("```", "").strip()
+            # B. Text-to-SQL
+            with st.spinner("Generando SQL..."):
+                prompt_sql = f"""Genera SQL para obtener nombre, nivel, producto, cuota y estado del cliente 450.
+                Tablas: clientes (id, nombre, nivel), suscripciones (id_cliente, producto, cuota, estado). 
+                Escribe SOLO el código SQL plano."""
+                response_sql = model.generate_content(prompt_sql)
+                query = response_sql.text.strip().replace("```sql", "").replace("```", "").strip()
                 st.code(query, language="sql")
                 
-                # Ejecución y guardado de contexto
                 df = pd.read_sql_query(query, conn)
                 st.session_state.datos_contexto = df.to_string()
                 st.dataframe(df)
-            except Exception as e: 
-                st.error(f"Error en Text-to-SQL: {e}")
+        except Exception as e:
+            st.error(f"Error detectado: {e}")
 
-# 2. CHAT DE PROFUNDIZACIÓN
+# --- CHAT ---
 st.divider()
-st.subheader("💬 2. Chat de Profundización (RAG)")
-
 for m in st.session_state.chat_history:
     with st.chat_message(m["role"]): st.markdown(m["content"])
 
-if p := st.chat_input("Pregunte sobre ofertas de la competencia o datos del cliente..."):
+if p := st.chat_input("Pregunta al asistente..."):
     st.session_state.chat_history.append({"role": "user", "content": p})
     with st.chat_message("user"): st.markdown(p)
     
-    with st.spinner("Buscando en manuales y datos..."):
-        # Búsqueda semántica en RAG
-        docs = vectorstore.similarity_search(p, k=2)
-        contexto_rag = "\n".join([d.page_content for d in docs])
-        
-        # Generación de respuesta contextual
-        prompt_chat = f"""
-        Eres un experto en retención de clientes.
-        CONTEXTO SQL: {st.session_state.datos_contexto}
-        MOTIVO: {st.session_state.analisis_motivo}
-        DATOS RAG: {contexto_rag}
-        PREGUNTA: {p}
-        
-        Responde de forma estratégica y breve.
-        """
-        try:
-            res_chat = llm.invoke(prompt_chat)
-            st.session_state.chat_history.append({"role": "assistant", "content": res_chat.content})
-            with st.chat_message("assistant"): st.markdown(res_chat.content)
-            st.rerun()
-        except Exception as e: 
-            st.error(f"Error en chat: {e}")
-
+    docs = vectorstore.similarity_search(p, k=1)
+    prompt_chat = f"Datos: {st.session_state.datos_contexto}. Motivo: {st.session_state.analisis_motivo}. Regla: {docs[0].page_content}. Pregunta: {p}"
+    
+    try:
+        res_chat = model.generate_content(prompt_chat)
+        st.session_state.chat_history.append({"role": "assistant", "content": res_chat.text})
+        st.rerun()
+    except Exception as e:
+        st.error(f"Error en chat: {e}")
